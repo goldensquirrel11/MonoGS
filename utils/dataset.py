@@ -55,7 +55,7 @@ class ReplicaParser:
 
 class TUMParser:
     def __init__(self, input_folder):
-        self.depth_model = UniDepthV2.from_pretrained("lpiccinelli/unidepth-v2-vitl14")
+        self.depth_model = UniDepthV2.from_pretrained("lpiccinelli/unidepth-v2-vitl14", revision="1d0d3c52f60b5164629d279bb9a7546458e6dcc4")
         self.depth_model.to("cuda:0")
         self.input_folder = input_folder
         self.intrinsics_list = []
@@ -570,7 +570,7 @@ class ROSDataset(BaseDataset):
         super().__init__(args, path, config)
         self.depth_model = None
         if self.config["ROS_topics"]["depth_topic"] == 'None' or self.config["ROS_topics"]["camera_info_topic"] == 'None':
-            self.depth_model = UniDepthV2.from_pretrained("lpiccinelli/unidepth-v2-vitl14")
+            self.depth_model = UniDepthV2.from_pretrained("lpiccinelli/unidepth-v2-vitl14", revision="1d0d3c52f60b5164629d279bb9a7546458e6dcc4")
             self.depth_model.to("cuda:0")
         self.bridge = CvBridge()
         self.image = None
