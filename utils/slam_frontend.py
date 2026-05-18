@@ -171,6 +171,7 @@ class FrontEnd(mp.Process):
 
         pose_optimizer = torch.optim.Adam(opt_params)
         for tracking_itr in range(self.tracking_itr_num):
+            torch.cuda.empty_cache() # Clear CUDA cache and free memory
             render_pkg = render(
                 viewpoint, self.gaussians, self.pipeline_params, self.background
             )
