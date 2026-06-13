@@ -17,7 +17,6 @@ try:
 except Exception:
     pass
 
-from unidepth.models import UniDepthV2
 import rclpy
 from sensor_msgs.msg import Image as ROSImage, CameraInfo
 from cv_bridge import CvBridge, CvBridgeError
@@ -55,11 +54,7 @@ class ReplicaParser:
 
 class TUMParser:
     def __init__(self, input_folder):
-        self.depth_model = UniDepthV2.from_pretrained("lpiccinelli/unidepth-v2-vitl14", revision="1d0d3c52f60b5164629d279bb9a7546458e6dcc4")
-        self.depth_model.to("cuda:0")
         self.input_folder = input_folder
-        self.intrinsics_list = []
-        self.intrensics = None
         self.load_poses(self.input_folder, frame_rate=32)
         self.n_img = len(self.color_paths)
 
@@ -85,23 +80,6 @@ class TUMParser:
                     associations.append((i, j, k))
 
         return associations
-    
-    def create_or_clean_directory(self, dir_path):
-        # Check if the directory already exists
-        if os.path.exists(dir_path):
-            # If it exists, remove all files inside the directory
-            for filename in os.listdir(dir_path):
-                file_path = os.path.join(dir_path, filename)
-                try:
-                    if os.path.isfile(file_path) or os.path.islink(file_path):
-                        os.unlink(file_path)
-                    elif os.path.isdir(file_path):
-                        shutil.rmtree(file_path)
-                except Exception as e:
-                    print(f'Failed to delete {file_path}. Reason: {e}')
-        else:
-            # If it does not exist, create the directory
-            os.mkdir(dir_path)
 
     def load_poses(self, datapath, frame_rate=-1):
         if os.path.isfile(os.path.join(datapath, "groundtruth.txt")):
@@ -130,21 +108,11 @@ class TUMParser:
                 indicies += [i]
 
         self.color_paths, self.poses, self.depth_paths, self.frames = [], [], [], []
-        self.create_or_clean_directory(os.path.join(datapath, "neural_depth"))
+
         for ix in indicies:
             (i, j, k) = associations[ix]
             self.color_paths += [os.path.join(datapath, image_data[i, 1])]
-            rgb = torch.from_numpy(np.array(Image.open(os.path.join(datapath, image_data[i, 1])))).permute(2, 0, 1)
-            intrensics = torch.from_numpy(np.array([[535.4, 0.0, 539.2], [0.0, 320.1, 247.6], [0.0, 0.0, 1.0]]).astype(np.float32))
-            predictions = self.depth_model.infer(rgb)#, intrensics)
-            depth = predictions["depth"]
-            intrinsics = predictions["K"].squeeze().cpu().numpy()  # Convert to 2D numpy array on the CPU
-            self.intrinsics_list.append(intrinsics)
-            depth = depth.squeeze().cpu().numpy()
-            depth[np.isnan(depth)] = 0
-            depth_pixels = (depth * 5000).astype(np.uint16)
-            cv2.imwrite(os.path.join(datapath, "neural_depth", "depth_data_{}.png".format(ix)), depth_pixels)
-            self.depth_paths += [os.path.join(datapath, "neural_depth", "depth_data_{}.png".format(ix))]
+            self.depth_paths += [os.path.join(datapath, depth_data[j, 1])]
 
             quat = pose_vecs[k][4:]
             trans = pose_vecs[k][1:4]
@@ -154,13 +122,10 @@ class TUMParser:
 
             frame = {
                 "file_path": str(os.path.join(datapath, image_data[i, 1])),
-                "depth_path":  os.path.join(datapath, "neural_depth", "depth_data_{}.png".format(ix)), #"/home/hari/monoGS_ros_wrapper/UniDepth/dataset/depth_data_{}.png".format(ix),#str(os.path.join(datapath, depth_data[j, 1])),
+                "depth_path": str(os.path.join(datapath, depth_data[j, 1])),
                 "transform_matrix": (np.linalg.inv(T)).tolist(),
             }
             self.frames.append(frame)
-        self.depth_model.cpu()
-        del self.depth_model
-        self.intrensics = np.mean(self.intrinsics_list, axis=0)
 
 
 class EuRoCParser:
@@ -443,15 +408,6 @@ class TUMDataset(MonocularDataset):
         self.color_paths = parser.color_paths
         self.depth_paths = parser.depth_paths
         self.poses = parser.poses
-        self.fx = parser.intrensics[0, 0]
-        self.fy = parser.intrensics[1, 1]
-        self.cx = parser.intrensics[0, 2]
-        self.cy = parser.intrensics[1, 2]
-        self.fovx = focal2fov(self.fx, self.width)
-        self.fovy = focal2fov(self.fy, self.height)
-        self.K = np.array(
-            [[self.fx, 0.0, self.cx], [0.0, self.fy, self.cy], [0.0, 0.0, 1.0]]
-        )
 
 
 class ReplicaDataset(MonocularDataset):
@@ -568,10 +524,6 @@ class RealsenseDataset(BaseDataset):
 class ROSDataset(BaseDataset):
     def __init__(self, args, path, config):
         super().__init__(args, path, config)
-        self.depth_model = None
-        if self.config["ROS_topics"]["depth_topic"] == 'None' or self.config["ROS_topics"]["camera_info_topic"] == 'None':
-            self.depth_model = UniDepthV2.from_pretrained("lpiccinelli/unidepth-v2-vitl14", revision="1d0d3c52f60b5164629d279bb9a7546458e6dcc4")
-            self.depth_model.to("cuda:0")
         self.bridge = CvBridge()
         self.image = None
         self.image_received = False
@@ -592,11 +544,11 @@ class ROSDataset(BaseDataset):
             self.disorted = None
             self.cameraInfo_sub = self.node.create_subscription(CameraInfo, str(self.config["ROS_topics"]["camera_info_topic"]), self.cameraInfo_callback, 1)
         else:
-            self.node.get_logger().warn("Camera Info not provided, UniDepthV2 will estimate intrensics/parameters and assume image is not distorted!")
+            self.node.get_logger().warn("Camera Info not provided, attempting to load Calibration config.")
             self.disorted = False
         if self.config["ROS_topics"]["depth_topic"] == 'None':
             self.image_sub = self.node.create_subscription(ROSImage, str(self.config["ROS_topics"]["camera_topic"]), self.image_callback, 1)
-            self.node.get_logger().warn("Depth topic not provided, depth will be estimated by UniDepthV2!")
+            self.node.get_logger().warn("Depth topic not provided, running in monocular mode.")
         else:
             # Create subscribers with message filters
             self.image_sub = message_filters.Subscriber(self.node, ROSImage, str(self.config["ROS_topics"]["camera_topic"]))
@@ -611,7 +563,29 @@ class ROSDataset(BaseDataset):
             self.node.get_logger().warn("Waiting for camera to start and camera intrensics/parameters to get set....")
             rclpy.spin_once(self.node, timeout_sec=0.1)
             if self.config["ROS_topics"]["camera_info_topic"] == 'None' and self.image is not None:
-                self.estimateIntrensics(self.image)
+                if "Calibration" in self.config["Dataset"]:
+                    calibration = self.config["Dataset"]["Calibration"]
+                    self.fx = calibration["fx"]
+                    self.fy = calibration["fy"]
+                    self.cx = calibration["cx"]
+                    self.cy = calibration["cy"]
+                    self.width = calibration["width"]
+                    self.height = calibration["height"]
+                    self.dist_coeffs = np.array([
+                        calibration.get("k1", 0.0),
+                        calibration.get("k2", 0.0),
+                        calibration.get("p1", 0.0),
+                        calibration.get("p2", 0.0),
+                        calibration.get("k3", 0.0),
+                    ])
+                    self.disorted = calibration.get("distorted", False)
+                    self.K = np.array(
+                        [[self.fx, 0.0, self.cx], [0.0, self.fy, self.cy], [0.0, 0.0, 1.0]]
+                    )
+                    self.fovx = focal2fov(self.fx, self.width)
+                    self.fovy = focal2fov(self.fy, self.height)
+                else:
+                    raise ValueError("Camera info topic is None and no Calibration config is provided in Dataset!")
         if not self.__check_all_parameters__() and self.config["ROS_topics"]["camera_info_topic"] != 'None':
             self.node.destroy_subscription(self.cameraInfo_sub)
             self.node.get_logger().info("Successfully loaded intrensics/camera parameters.")
@@ -675,7 +649,7 @@ class ROSDataset(BaseDataset):
         pose = torch.eye(4, device=self.device, dtype=self.dtype)
         image = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
         if self.config["ROS_topics"]["depth_topic"] == 'None':
-            depth = self.generateDepth(image)
+            depth = None
         else:
             depth = self.depth
         if self.disorted:
@@ -688,32 +662,6 @@ class ROSDataset(BaseDataset):
         )
 
         return image, depth, pose
-    
-    def generateDepth(self, rgb):
-        rgb_image = torch.from_numpy(rgb).permute(2, 0, 1)
-        intrensics = torch.from_numpy(self.K.astype(np.float32))
-        if self.config["ROS_topics"]["camera_info_topic"] != 'None':
-            predictions = self.depth_model.infer(rgb_image, intrensics)
-        else:
-            predictions = self.depth_model.infer(rgb_image)
-        depth = predictions["depth"]
-        depth = depth.squeeze().cpu().numpy()
-        depth[np.isnan(depth)] = 0
-        return depth
-    
-    def estimateIntrensics(self, bgr):
-        rgb_image = torch.from_numpy(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)).permute(2, 0, 1)
-        predictions = self.depth_model.infer(rgb_image)
-        self.K = predictions["K"].squeeze().cpu().numpy()
-        self.fx = self.K[0, 0]
-        self.fy = self.K[1, 1]
-        self.cx = self.K[0, 2]
-        self.cy = self.K[1, 2]
-        self.height, self.width, _ = bgr.shape
-        self.fovx = focal2fov(self.fx, self.width)
-        self.fovy = focal2fov(self.fy, self.height)
-        self.dist_coeffs = np.zeros(8)
-        self.node.get_logger().warn("Camera Intrensics/parameters set and estimated by UniDepthV2")
 
 def load_dataset(args, path, config):
     if config["Dataset"]["type"] == "tum":
