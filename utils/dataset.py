@@ -560,7 +560,7 @@ class ROSDataset(BaseDataset):
         self.has_depth = True if self.config["Dataset"]["sensor_type"] == "depth" else False
         
         while self.__check_all_parameters__() or not self.image_received:
-            self.node.get_logger().warn("Waiting for camera to start and camera intrensics/parameters to get set....")
+            self.node.get_logger().warn("Waiting for camera to start and camera intrinsics/parameters to get set....")
             rclpy.spin_once(self.node, timeout_sec=0.1)
             if self.config["ROS_topics"]["camera_info_topic"] == 'None' and self.image is not None:
                 if "Calibration" in self.config["Dataset"]:
@@ -588,7 +588,7 @@ class ROSDataset(BaseDataset):
                     raise ValueError("Camera info topic is None and no Calibration config is provided in Dataset!")
         if not self.__check_all_parameters__() and self.config["ROS_topics"]["camera_info_topic"] != 'None':
             self.node.destroy_subscription(self.cameraInfo_sub)
-            self.node.get_logger().info("Successfully loaded intrensics/camera parameters.")
+            self.node.get_logger().info("Successfully loaded intrinsics/camera parameters.")
         self.map1x, self.map1y = None, None
         if self.disorted:
             self.map1x, self.map1y = cv2.initUndistortRectifyMap(

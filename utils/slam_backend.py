@@ -231,7 +231,7 @@ class BackEnd(mp.Process):
             loss_mapping += 10 * isotropic_loss.mean()
             loss_mapping.backward()
             gaussian_split = False
-            ## Deinsifying / Pruning Gaussians
+            ## Densifying / Pruning Gaussians
             with torch.no_grad():
                 self.occ_aware_visibility = {}
                 for idx in range((len(current_window))):
