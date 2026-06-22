@@ -51,6 +51,8 @@ class SLAM_GUI:
         self.background = None
 
         self.last_memory_update = 0
+        self.fps_start_time = time.time()
+        self.frame_count = 0
 
         try:
             pynvml.nvmlInit()
@@ -228,6 +230,9 @@ class SLAM_GUI:
         self.vram_info = gui.Label("VRAM: ")
         tab_info.add_child(self.ram_info)
         tab_info.add_child(self.vram_info)
+
+        self.frontend_fps = gui.Label("Tracking FPS: ")
+        tab_info.add_child(self.frontend_fps)
 
         self.in_rgb_widget = gui.ImageWidget()
         self.in_depth_widget = gui.ImageWidget()
@@ -458,6 +463,18 @@ class SLAM_GUI:
             frustum = self.add_camera(
                 gaussian_packet.current_frame, name="current", color=[0, 1, 0]
             )
+
+            # Update frontend FPS
+            self.frame_count += 1
+            current_time = time.time()
+            elapsed_time = current_time - self.fps_start_time
+
+            if elapsed_time >= 1:
+                fps = self.frame_count / elapsed_time
+                self.frontend_fps.text = f"Tracking FPS: {fps:.1f}"
+                self.frame_count = 0
+                self.fps_start_time = current_time
+
             if self.followcam_chbox.checked:
                 viewpoint = (
                     frustum.view_dir_behind
