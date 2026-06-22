@@ -11,6 +11,9 @@ import open3d as o3d
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 import torch
+import psutil
+import time
+import pynvml
 import torch.nn.functional as F
 from OpenGL import GL as gl
 
@@ -46,6 +49,15 @@ class SLAM_GUI:
         self.gaussian_cur = None
         self.pipe = None
         self.background = None
+
+        self.last_memory_update = 0
+
+        try:
+            pynvml.nvmlInit()
+            self.nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # GPU 0
+        except Exception as e:
+            print(f"Warning: pynvml initialization failed: {e}")
+            self.nvml_handle = None
 
         self.init = False
         self.kf_window = None
@@ -212,6 +224,11 @@ class SLAM_GUI:
         self.output_info = gui.Label("Number of Gaussians: ")
         tab_info.add_child(self.output_info)
 
+        self.ram_info = gui.Label("RAM: ")
+        self.vram_info = gui.Label("VRAM: ")
+        tab_info.add_child(self.ram_info)
+        tab_info.add_child(self.vram_info)
+
         self.in_rgb_widget = gui.ImageWidget()
         self.in_depth_widget = gui.ImageWidget()
         tab_info.add_child(gui.Label("Input Color/Depth"))
@@ -286,6 +303,12 @@ class SLAM_GUI:
         )
 
     def _on_close(self):
+        if self.nvml_handle is not None:
+            try:
+                pynvml.nvmlShutdown()
+            except:
+                pass
+
         self.is_done = True
         return True  # False would cancel the close
 
@@ -386,6 +409,35 @@ class SLAM_GUI:
 
             self.gaussian_id_dict[idx] = 0
             self.combo_gaussian_id.add_item(str(idx))
+
+    def _update_memory_usage(self):
+        """Update RAM and VRAM usage periodically"""
+        try:
+            current_time = time.time()
+            # Throttle updates to 1 Hz to keep overhead minimal
+            if current_time - self.last_memory_update < 1.0:
+                return
+            self.last_memory_update = current_time
+
+            # RAM Usage
+            ram = psutil.virtual_memory()
+            ram_used = ram.used / (1024 ** 3)
+            ram_total = ram.total / (1024 ** 3)
+            self.ram_info.text = f"RAM: {ram_used:.1f}/{ram_total:.1f} GB ({ram.percent}%)"
+
+            # VRAM Usage
+            if torch.cuda.is_available():
+                mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.nvml_handle)
+                vram_used = mem_info.used / (1024 ** 2)
+                vram_total = mem_info.total / (1024 ** 2)
+                self.vram_info.text = f"VRAM: {vram_used:.1f}/{vram_total:.1f} MB ({(mem_info.used / mem_info.total)*100:.1f}%)"
+            else:
+                self.vram_info.text = "VRAM: N/A (pynvml unavailable)"
+
+        except Exception as e:
+            self.ram_info.text = "RAM: Error"
+            self.vram_info.text = "VRAM: Error"
+            print(e)
 
     def receive_data(self, q):
         if q is None:
@@ -672,6 +724,8 @@ class SLAM_GUI:
                 break
 
             def update():
+                self._update_memory_usage()
+
                 if self.step % 3 == 0:
                     self.scene_update()
 
