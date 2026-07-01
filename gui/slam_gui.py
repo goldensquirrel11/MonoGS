@@ -53,6 +53,7 @@ class SLAM_GUI:
         self.last_memory_update = 0
         self.frontend_fps_start = time.time()
         self.frontend_frame_count = 0
+        self.backend_fps_start = time.time()
 
         try:
             pynvml.nvmlInit()
@@ -232,7 +233,9 @@ class SLAM_GUI:
         tab_info.add_child(self.vram_info)
 
         self.frontend_fps = gui.Label("Tracking FPS: ")
+        self.backend_fps = gui.Label("Mapping Speed: ")
         tab_info.add_child(self.frontend_fps)
+        tab_info.add_child(self.backend_fps)
 
         self.in_rgb_widget = gui.ImageWidget()
         self.in_depth_widget = gui.ImageWidget()
@@ -489,10 +492,25 @@ class SLAM_GUI:
                 gaussian_packet.keyframe, name=name, color=[0, 0, 1]
             )
 
+            current_time = time.time()
+            elapsed_time = current_time - self.backend_fps_start
+            fps = 1/elapsed_time
+            self.backend_fps.text = f"Mapping Speed: {fps:.1f} updates per second"
+            self.backend_fps_start = current_time
+
         if gaussian_packet.keyframes is not None:
+            frame_count = 0
             for keyframe in gaussian_packet.keyframes:
                 name = "keyframe_{}".format(keyframe.uid)
                 frustum = self.add_camera(keyframe, name=name, color=[0, 0, 1])
+                frame_count += 1
+
+            current_time = time.time()
+            elapsed_time = current_time - self.backend_fps_start
+            fps = frame_count/elapsed_time
+            self.backend_fps.text = f"Mapping Speed: {fps:.1f} updates per second"
+            self.backend_fps_start = current_time
+
 
         if gaussian_packet.kf_window is not None:
             self.kf_window = gaussian_packet.kf_window
