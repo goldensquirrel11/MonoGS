@@ -34,12 +34,13 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/ --ignore=tests/system -v
 
   gpu-system-tests:
-    # Stage 3-4 end-to-end (tracking/mapping + ROS output): needs CUDA, the
-    # built diff-gaussian-rasterization submodule, and a display (live mode
-    # always spawns the GUI process -- see tests/system/test_live_pipeline.py
-    # docstring). GitHub-hosted runners have neither; this requires a
-    # self-hosted GPU runner and is not run automatically on every push.
-    if: false  # flip to true once a self-hosted GPU/xvfb runner is registered
+    # Stage 3-4 end-to-end (tracking/mapping + ROS output): needs CUDA and
+    # the built diff-gaussian-rasterization submodule. slam.py is run with
+    # --headless, so no display/xvfb-run is needed here (see
+    # tests/system/test_live_pipeline.py docstring). GitHub-hosted runners
+    # have no GPU; this requires a self-hosted GPU runner and is not run
+    # automatically on every push.
+    if: false  # flip to true once a self-hosted GPU runner is registered
     runs-on: [self-hosted, gpu]
     steps:
       - uses: actions/checkout@v4
@@ -51,4 +52,4 @@ jobs:
         run: |
           source /opt/ros/humble/setup.bash
           conda activate mono_gs_ros
-          xvfb-run -a pytest tests/system/test_live_pipeline.py -v
+          pytest tests/system/test_live_pipeline.py -v
