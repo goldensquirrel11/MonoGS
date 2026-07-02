@@ -24,6 +24,7 @@ import message_filters
 import threading
 
 class ReplicaParser:
+    # Discover Replica color/depth frame paths and load ground-truth poses.
     def __init__(self, input_folder):
         self.input_folder = input_folder
         self.color_paths = sorted(glob.glob(f"{self.input_folder}/results/frame*.jpg"))
@@ -31,6 +32,7 @@ class ReplicaParser:
         self.n_img = len(self.color_paths)
         self.load_poses(f"{self.input_folder}/traj.txt")
 
+    # Read the Replica trajectory file and build per-frame pose/path dicts.
     def load_poses(self, path):
         self.poses = []
         with open(path, "r") as f:
@@ -53,15 +55,18 @@ class ReplicaParser:
 
 
 class TUMParser:
+    # Parse a TUM-format dataset folder and load associated poses at given frame rate.
     def __init__(self, input_folder):
         self.input_folder = input_folder
         self.load_poses(self.input_folder, frame_rate=32)
         self.n_img = len(self.color_paths)
 
+    # Load a whitespace-delimited text file (e.g. rgb.txt, depth.txt) as an array.
     def parse_list(self, filepath, skiprows=0):
         data = np.loadtxt(filepath, delimiter=" ", dtype=np.unicode_, skiprows=skiprows)
         return data
 
+    # Match image, depth, and pose entries by closest timestamp within max_dt.
     def associate_frames(self, tstamp_image, tstamp_depth, tstamp_pose, max_dt=0.08):
         associations = []
         for i, t in enumerate(tstamp_image):
@@ -81,6 +86,7 @@ class TUMParser:
 
         return associations
 
+    # Read TUM groundtruth/pose file, associate with images, and subsample by frame rate.
     def load_poses(self, datapath, frame_rate=-1):
         if os.path.isfile(os.path.join(datapath, "groundtruth.txt")):
             pose_list = os.path.join(datapath, "groundtruth.txt")
@@ -129,6 +135,7 @@ class TUMParser:
 
 
 class EuRoCParser:
+    # Load EuRoC stereo image paths (from start_idx) and their ground-truth poses.
     def __init__(self, input_folder, start_idx=0):
         self.input_folder = input_folder
         self.start_idx = start_idx
@@ -146,6 +153,7 @@ class EuRoCParser:
             f"{self.input_folder}/mav0/state_groundtruth_estimate0/data.csv"
         )
 
+    # Find nearest ground-truth pose index for each color frame by timestamp.
     def associate(self, ts_pose):
         pose_indices = []
         for i in range(self.n_img):
@@ -155,6 +163,7 @@ class EuRoCParser:
 
         return pose_indices
 
+    # Load EuRoC ground-truth CSV and convert IMU poses to camera-frame world poses.
     def load_poses(self, path):
         self.poses = []
         with open(path) as f:
@@ -197,6 +206,7 @@ class EuRoCParser:
 
 
 class BaseDataset(torch.utils.data.Dataset):
+    # Store dataset args/path/config and set defaults shared by all dataset types.
     def __init__(self, args, path, config):
         self.args = args
         self.path = path
@@ -205,14 +215,17 @@ class BaseDataset(torch.utils.data.Dataset):
         self.dtype = torch.float32
         self.num_imgs = 999999
 
+    # Return the number of images in the dataset.
     def __len__(self):
         return self.num_imgs
 
+    # Placeholder; subclasses override to return (image, depth, pose) for idx.
     def __getitem__(self, idx):
         pass
 
 
 class MonocularDataset(BaseDataset):
+    # Set up intrinsics, distortion undistort maps, and depth scale for monocular RGB-D data.
     def __init__(self, args, path, config):
         super().__init__(args, path, config)
         calibration = config["Dataset"]["Calibration"]
@@ -260,6 +273,7 @@ class MonocularDataset(BaseDataset):
             },
         }
 
+    # Load, undistort, and normalize a monocular RGB(-D) frame and its pose.
     def __getitem__(self, idx):
         color_path = self.color_paths[idx]
         pose = self.poses[idx]
@@ -285,6 +299,7 @@ class MonocularDataset(BaseDataset):
 
 
 class StereoDataset(BaseDataset):
+    # Set up left/right camera intrinsics, rectification maps, and distortion for stereo data.
     def __init__(self, args, path, config):
         super().__init__(args, path, config)
         calibration = config["Dataset"]["Calibration"]
@@ -368,6 +383,7 @@ class StereoDataset(BaseDataset):
             cv2.CV_32FC1,
         )
 
+    # Load stereo pair, undistort, compute disparity via SGBM, and derive depth.
     def __getitem__(self, idx):
         color_path = self.color_paths[idx]
         color_path_r = self.color_paths_r[idx]
@@ -400,6 +416,7 @@ class StereoDataset(BaseDataset):
 
 
 class TUMDataset(MonocularDataset):
+    # Build a monocular dataset backed by a parsed TUM sequence.
     def __init__(self, args, path, config):
         super().__init__(args, path, config)
         dataset_path = config["Dataset"]["dataset_path"]
@@ -411,6 +428,7 @@ class TUMDataset(MonocularDataset):
 
 
 class ReplicaDataset(MonocularDataset):
+    # Build a monocular dataset backed by a parsed Replica sequence.
     def __init__(self, args, path, config):
         super().__init__(args, path, config)
         dataset_path = config["Dataset"]["dataset_path"]
@@ -422,6 +440,7 @@ class ReplicaDataset(MonocularDataset):
 
 
 class EurocDataset(StereoDataset):
+    # Build a stereo dataset backed by a parsed EuRoC sequence.
     def __init__(self, args, path, config):
         super().__init__(args, path, config)
         dataset_path = config["Dataset"]["dataset_path"]
@@ -433,6 +452,7 @@ class EurocDataset(StereoDataset):
 
 
 class RealsenseDataset(BaseDataset):
+    # Configure and start a RealSense pipeline, reading intrinsics and depth scale.
     def __init__(self, args, path, config):
         super().__init__(args, path, config)
         self.pipeline = rs.pipeline()
@@ -491,6 +511,7 @@ class RealsenseDataset(BaseDataset):
             )
             self.depth_intrinsics = self.depth_profile.get_intrinsics()
 
+    # Grab and align a live RealSense color/depth frameset, undistort, and return tensors.
     def __getitem__(self, idx):
         pose = torch.eye(4, device=self.device, dtype=self.dtype)
         depth = None
@@ -522,7 +543,8 @@ class RealsenseDataset(BaseDataset):
         return image, depth, pose
 
 class ROSDataset(BaseDataset):
-    def __init__(self, args, path, config):
+    # Subscribe to ROS camera/depth topics and block until intrinsics and first frame arrive.
+    def __init__(self, args, path, config, node):
         super().__init__(args, path, config)
         self.bridge = CvBridge()
         self.image = None
@@ -538,7 +560,7 @@ class ROSDataset(BaseDataset):
         self.fovx = None
         self.fovy = None
         self.dist_coeffs = None
-        self.node = rclpy.create_node("monoGS_dataloader")
+        self.node = node
         if self.config["ROS_topics"]["camera_info_topic"] != 'None':
             self.node.get_logger().info("Camera Info topic provided")
             self.disorted = None
@@ -598,6 +620,7 @@ class ROSDataset(BaseDataset):
         self.spin_thread = threading.Thread(target=self.spin)
         self.spin_thread.start()
     
+    # Check whether any required intrinsic/calibration parameter is still unset.
     def __check_all_parameters__(self):
         return (self.fx is None or
                 self.fy is None or
@@ -610,6 +633,7 @@ class ROSDataset(BaseDataset):
                 self.fovy is None or
                 self.dist_coeffs is None)
 
+    # ROS callback: populate intrinsics/distortion from a received CameraInfo message.
     def cameraInfo_callback(self, msg):
         self.fx = msg.k[0]
         self.fy = msg.k[4]
@@ -626,6 +650,7 @@ class ROSDataset(BaseDataset):
         self.fovy = focal2fov(self.fy, self.height)
         self.node.get_logger().info("Camera parameters set.")
 
+    # ROS callback: store the latest color image (monocular mode, no depth sync).
     def image_callback(self, msg):
         self.image_received = True
         try:
@@ -633,6 +658,7 @@ class ROSDataset(BaseDataset):
         except CvBridgeError as e:
             self.node.get_logger().error("Error: {}".format(e))
     
+    # ROS callback: store time-synchronized color and depth images.
     def common_callback(self, image_msg, depth_msg):
         self.image_received = True
         try:
@@ -641,10 +667,12 @@ class ROSDataset(BaseDataset):
         except CvBridgeError as e:
             self.node.get_logger().error("Error: {}".format(e))
 
+    # Continuously spin the ROS node to process incoming messages (runs in a thread).
     def spin(self):
         while rclpy.ok():
             rclpy.spin_once(self.node, timeout_sec=0.1)
 
+    # Return the latest received color/depth frame (undistorted) as tensors with identity pose.
     def __getitem__(self, idx):
         pose = torch.eye(4, device=self.device, dtype=self.dtype)
         image = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
@@ -663,7 +691,8 @@ class ROSDataset(BaseDataset):
 
         return image, depth, pose
 
-def load_dataset(args, path, config):
+# Factory: instantiate the appropriate Dataset subclass based on config type.
+def load_dataset(args, path, config, node):
     if config["Dataset"]["type"] == "tum":
         return TUMDataset(args, path, config)
     elif config["Dataset"]["type"] == "replica":
@@ -673,6 +702,6 @@ def load_dataset(args, path, config):
     elif config["Dataset"]["type"] == "realsense":
         return RealsenseDataset(args, path, config)
     elif config["Dataset"]["type"] == "ROS":
-        return ROSDataset(args, path, config)
+        return ROSDataset(args, path, config, node)
     else:
         raise ValueError("Unknown dataset type")

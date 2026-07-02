@@ -35,6 +35,7 @@ o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
 
 
 class SLAM_GUI:
+    # Set up GUI state, OpenGL/Open3D windows, renderer, and start the update thread.
     def __init__(self, params_gui=None):
         self.step = 0
         self.process_finished = False
@@ -91,6 +92,7 @@ class SLAM_GUI:
 
         threading.Thread(target=self._update_thread).start()
 
+    # Build the Open3D window, 3D scene widget, and side panel controls/checkboxes.
     def init_widget(self):
         self.window_w, self.window_h = 1600, 900
 
@@ -247,6 +249,7 @@ class SLAM_GUI:
         self.panel.add_child(tabs)
         self.window.add_child(self.panel)
 
+    # Create a hidden GLFW window used for headless OpenGL rendering.
     def init_glfw(self):
         window_name = "headless rendering"
 
@@ -265,6 +268,7 @@ class SLAM_GUI:
             exit(1)
         return window
 
+    # Push Gaussian data and camera state into the OpenGL renderer and sort/update.
     def update_activated_renderer_state(self, gaus):
         self.g_renderer.update_gaussian_data(gaus)
         self.g_renderer.sort_and_update(self.g_camera)
@@ -274,6 +278,7 @@ class SLAM_GUI:
         self.g_renderer.update_camera_intrin(self.g_camera)
         self.g_renderer.set_render_reso(self.g_camera.w, self.g_camera.h)
 
+    # Create/update a camera frustum geometry in the scene from a Camera pose.
     def add_camera(self, camera, name, color=[0, 1, 0], gt=False, size=0.01):
         W2C = (
             getWorld2View2(camera.R_gt, camera.T_gt)
@@ -294,6 +299,7 @@ class SLAM_GUI:
         self.widget3d.scene.show_geometry(name, self.cameras_chbox.checked)
         return frustum
 
+    # Layout callback: position the 3D widget and side panel within the window.
     def _on_layout(self, layout_context):
         contentRect = self.window.content_rect
         self.widget3d_width_ratio = 0.7
@@ -310,6 +316,7 @@ class SLAM_GUI:
             contentRect.height,
         )
 
+    # Window close callback: shut down NVML and flag the window as done.
     def _on_close(self):
         if self.nvml_handle is not None:
             try:
@@ -320,21 +327,25 @@ class SLAM_GUI:
         self.is_done = True
         return True  # False would cancel the close
 
+    # Combobox callback: switch the active map to the selected model.
     def _on_combo_model(self, new_val, new_idx):
         model_idx = self.model_dict[new_val]
         self.global_map.active_map_idx = model_idx
 
+    # Combobox callback: jump the 3D view to the selected keyframe viewpoint.
     def _on_combo_kf(self, new_val, new_idx):
         frustum = self.frustum_dict[new_val]
         viewpoint = frustum.view_dir
 
         self.widget3d.look_at(viewpoint[0], viewpoint[1], viewpoint[2])
 
+    # Checkbox callback: show/hide camera frustum geometries in the scene.
     def _on_cameras_chbox(self, is_checked, name=None):
         names = self.frustum_dict.keys() if name is None else [name]
         for name in names:
             self.widget3d.scene.show_geometry(name, is_checked)
 
+    # Checkbox callback: toggle the coordinate axis geometry in the scene.
     def _on_axis_chbox(self, is_checked):
         name = "axis"
         if is_checked:
@@ -343,6 +354,7 @@ class SLAM_GUI:
         else:
             self.widget3d.scene.remove_geometry(name)
 
+    # Checkbox callback: draw/remove edges linking keyframes in the active window.
     def _on_kf_window_chbox(self, is_checked):
         if self.kf_window is None:
             return
@@ -370,20 +382,24 @@ class SLAM_GUI:
                 else:
                     self.widget3d.scene.remove_geometry(name)
 
+    # Pause/resume toggle callback: send pause flag to the SLAM backend via queue.
     def _on_button(self, is_on):
         packet = Packet_vis2main()
         packet.flag_pause = not self.button.is_on
         self.q_vis2main.put(packet)
 
+    # Slider callback: send updated viz parameters to the backend via queue.
     def _on_slider(self, value):
         packet = self.prepare_viz2main_packet()
         self.q_vis2main.put(packet)
 
+    # Button callback: request the next batch to be rendered from the backend.
     def _on_render_btn(self):
         packet = Packet_vis2main()
         packet.flag_nextbatch = True
         self.q_vis2main.put(packet)
 
+    # Button callback: save the current GUI view and rendered image to disk.
     def _on_screenshot_btn(self):
         if self.render_img is None:
             return
@@ -402,11 +418,13 @@ class SLAM_GUI:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         cv2.imwrite(f"{filename}.png", img)
 
+    # Resize a numpy image to a target width, preserving aspect ratio.
     @staticmethod
     def resize_img(img, width):
         height = int(width * img.shape[0] / img.shape[1])
         return cv2.resize(img, (width, height))
 
+    # Register newly seen Gaussian keyframe IDs in the ID dict/combo box.
     def add_ids(self):
         indices = (
             torch.unique(self.gaussian_cur.unique_kfIDs).cpu().numpy().astype(int)
@@ -447,6 +465,7 @@ class SLAM_GUI:
             self.vram_info.text = "VRAM: Error"
             print(e)
 
+    # Pull the latest packet from the backend queue and update GUI state/FPS/images.
     def receive_data(self, q):
         if q is None:
             return
@@ -544,6 +563,7 @@ class SLAM_GUI:
             self.q_main2vis = None
             self.process_finished = True
 
+    # Estimate surface normals from a depth/point map via local cross products.
     @staticmethod
     def depth_to_normal(points, k=3, d_min=1e-3, d_max=10.0):
         k = (k - 1) // 2
@@ -587,6 +607,7 @@ class SLAM_GUI:
         normal = F.normalize(cross_product, p=2.0, dim=1, eps=1e-12)
         return normal, valid_mask
 
+    # Convert vertical FOV (degrees) to horizontal FOV given image height/width.
     @staticmethod
     def vfov_to_hfov(vfov_deg, height, width):
         # http://paulbourke.net/miscellaneous/lens/
@@ -594,6 +615,7 @@ class SLAM_GUI:
             2 * np.arctan(width * np.tan(np.deg2rad(vfov_deg) / 2) / height)
         )
 
+    # Build a Camera object from the current Open3D viewport pose and intrinsics.
     def get_current_cam(self):
         w2c = cv_gl @ self.widget3d.scene.camera.get_view_matrix()
 
@@ -624,6 +646,7 @@ class SLAM_GUI:
         current_cam.update_RT(T[0:3, 0:3], T[0:3, 3])
         return current_cam
 
+    # Render the Gaussians from current_cam, optionally tinting by keyframe ID.
     def rasterise(self, current_cam):
         if (
             self.time_shader_chbox.checked
@@ -657,6 +680,7 @@ class SLAM_GUI:
             )
         return rendering_data
 
+    # Convert render results (color/depth/opacity/ellipsoid) into an Open3D image.
     def render_o3d_image(self, results, current_cam):
         if self.depth_chbox.checked:
             depth = results["depth"]
@@ -735,6 +759,7 @@ class SLAM_GUI:
             render_img = o3d.geometry.Image(rgb)
         return render_img
 
+    # Rasterize the current camera view and set it as the scene background.
     def render_gui(self):
         if not self.init:
             return
@@ -745,10 +770,12 @@ class SLAM_GUI:
         self.render_img = self.render_o3d_image(results, current_cam)
         self.widget3d.scene.set_background([0, 0, 0, 1], self.render_img)
 
+    # Receive backend data and refresh the rendered scene.
     def scene_update(self):
         self.receive_data(self.q_main2vis)
         self.render_gui()
 
+    # Background loop that periodically schedules GUI updates on the main thread.
     def _update_thread(self):
         while True:
             time.sleep(0.01)
@@ -758,6 +785,7 @@ class SLAM_GUI:
                 Log("Closing Visualization", tag="GUI")
                 break
 
+            # Perform one periodic GUI update tick (memory stats and scene refresh).
             def update():
                 self._update_memory_usage()
 
@@ -770,6 +798,7 @@ class SLAM_GUI:
             gui.Application.instance.post_to_main_thread(self.window, update)
 
 
+# Initialize the Open3D application, create the SLAM_GUI window, and run its event loop.
 def run(params_gui=None):
     app = o3d.visualization.gui.Application.instance
     app.initialize()
@@ -777,6 +806,7 @@ def run(params_gui=None):
     app.run()
 
 
+# Entry point: launch the SLAM GUI standalone (without backend params).
 def main():
     app = o3d.visualization.gui.Application.instance
     app.initialize()

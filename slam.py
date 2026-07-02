@@ -28,6 +28,7 @@ from utils.slam_frontend import FrontEnd
 
 
 class SLAM:
+    # Set up ROS node, dataset, gaussian model, frontend/backend processes, run SLAM, and evaluate results.
     def __init__(self, config, save_dir=None):
         self.node = rclpy.create_node("monoGS")
         self.cloud_publisher = self.node.create_publisher(PointCloud2, '/monoGS/cloud', 10)
@@ -61,7 +62,7 @@ class SLAM:
         self.gaussians = GaussianModel(model_params.sh_degree, config=self.config)
         self.gaussians.init_lr(6.0)
         self.dataset = load_dataset(
-            model_params, model_params.source_path, config=config
+            model_params, model_params.source_path, config=config, node=self.node
         )
 
         self.gaussians.training_setup(opt_params)
@@ -202,6 +203,7 @@ class SLAM:
             gui_process.join()
             Log("GUI Stopped and joined the main thread")
 
+    # No-op; all SLAM work is already run inside __init__.
     def run(self):
         pass
 

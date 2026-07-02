@@ -2,6 +2,7 @@ import numpy as np
 import torch
 
 
+# Build a 4x4 homogeneous transform from a rotation matrix and translation vector.
 def rt2mat(R, T):
     mat = np.eye(4)
     mat[0:3, 0:3] = R
@@ -9,6 +10,7 @@ def rt2mat(R, T):
     return mat
 
 
+# Construct the 3x3 skew-symmetric matrix of a 3-vector.
 def skew_sym_mat(x):
     device = x.device
     dtype = x.dtype
@@ -22,6 +24,7 @@ def skew_sym_mat(x):
     return ssm
 
 
+# SO(3) exponential map: convert an axis-angle vector to a rotation matrix.
 def SO3_exp(theta):
     device = theta.device
     dtype = theta.dtype
@@ -40,6 +43,7 @@ def SO3_exp(theta):
         )
 
 
+# Left Jacobian of SO(3) used to map se(3) translation part to SE(3) translation.
 def V(theta):
     dtype = theta.dtype
     device = theta.device
@@ -58,6 +62,7 @@ def V(theta):
     return V
 
 
+# SE(3) exponential map: convert a 6-vector (rho, theta) into a 4x4 transform.
 def SE3_exp(tau):
     dtype = tau.dtype
     device = tau.device
@@ -73,6 +78,7 @@ def SE3_exp(tau):
     return T
 
 
+# Apply a camera's learned Lie-algebra pose delta to its pose and reset the delta.
 def update_pose(camera, converged_threshold=1e-4):
     tau = torch.cat([camera.cam_trans_delta, camera.cam_rot_delta], axis=0)
 

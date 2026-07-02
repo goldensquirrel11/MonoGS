@@ -14,12 +14,14 @@ cv_gl = np.array([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
 
 
 class Frustum:
+    # Store the line-set geometry and view parameters for a camera frustum.
     def __init__(self, line_set, view_dir=None, view_dir_behind=None, size=None):
         self.line_set = line_set
         self.view_dir = view_dir
         self.view_dir_behind = view_dir_behind
         self.size = size
 
+    # Recompute frustum points, eye/center/up view directions from a new pose.
     def update_pose(self, pose):
         points = np.asarray(self.line_set.points)
         points_hmg = np.hstack([points, np.ones((points.shape[0], 1))])
@@ -48,6 +50,7 @@ class Frustum:
         self.up = up
 
 
+# Build a canonical camera frustum LineSet colored and sized, then pose it.
 def create_frustum(pose, frusutum_color=[0, 1, 0], size=0.02):
     points = (
         np.array(
@@ -75,6 +78,7 @@ def create_frustum(pose, frusutum_color=[0, 1, 0], size=0.02):
 
 
 class GaussianPacket:
+    # Snapshot Gaussian model attributes and frame/keyframe data for IPC to the GUI.
     def __init__(
         self,
         gaussians=None,
@@ -112,6 +116,7 @@ class GaussianPacket:
         self.finish = finish
         self.kf_window = kf_window
 
+    # Resize an image (numpy HWC or torch CHW tensor) to a target width, keeping aspect ratio.
     def resize_img(self, img, width):
         if img is None:
             return None
@@ -127,11 +132,13 @@ class GaussianPacket:
         )
         return img.squeeze(0)
 
+    # Compute the 3D covariance matrices from scaling and rotation.
     def get_covariance(self, scaling_modifier=1):
         return self.build_covariance_from_scaling_rotation(
             self.get_scaling, scaling_modifier, self._rotation
         )
 
+    # Build the symmetric covariance matrix from scaling and rotation via L = R*S.
     def build_covariance_from_scaling_rotation(
         self, scaling, scaling_modifier, rotation
     ):
@@ -141,6 +148,7 @@ class GaussianPacket:
         return symm
 
 
+# Drain a queue and return only the most recent message, discarding older ones.
 def get_latest_queue(q):
     message = None
     while True:
@@ -160,6 +168,7 @@ class Packet_vis2main:
 
 
 class ParamsGUI:
+    # Bundle pipeline params, gaussians, and communication queues for GUI setup.
     def __init__(
         self,
         pipe=None,

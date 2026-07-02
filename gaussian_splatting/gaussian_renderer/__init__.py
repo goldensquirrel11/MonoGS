@@ -21,6 +21,7 @@ from gaussian_splatting.scene.gaussian_model import GaussianModel
 from gaussian_splatting.utils.sh_utils import eval_sh
 
 
+# Rasterizes a GaussianModel through a viewpoint camera to produce a rendered image, depth, radii, and visibility info.
 def render(
     viewpoint_camera,
     pc: GaussianModel,

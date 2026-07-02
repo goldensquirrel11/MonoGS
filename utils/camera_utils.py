@@ -6,6 +6,7 @@ from utils.slam_utils import image_gradient, image_gradient_mask
 
 
 class Camera(nn.Module):
+    # Store intrinsics, ground-truth/estimated pose, image/depth, and learnable pose/exposure params.
     def __init__(
         self,
         uid,
@@ -62,6 +63,7 @@ class Camera(nn.Module):
 
         self.projection_matrix = projection_matrix.to(device=device)
 
+    # Build a Camera from a dataset item (image, depth, pose) at the given index.
     @staticmethod
     def init_from_dataset(dataset, idx, projection_matrix):
         gt_color, gt_depth, gt_pose = dataset[idx]
@@ -82,6 +84,7 @@ class Camera(nn.Module):
             device=dataset.device,
         )
 
+    # Build a Camera from GUI-provided pose and intrinsics (no image/depth data).
     @staticmethod
     def init_from_gui(uid, T, FoVx, FoVy, fx, fy, cx, cy, H, W):
         projection_matrix = getProjectionMatrix2(
@@ -91,10 +94,12 @@ class Camera(nn.Module):
             uid, None, None, T, projection_matrix, fx, fy, cx, cy, FoVx, FoVy, H, W
         )
 
+    # World-to-camera view transform derived from current R, T.
     @property
     def world_view_transform(self):
         return getWorld2View2(self.R, self.T).transpose(0, 1)
 
+    # Combined view-projection transform for rendering.
     @property
     def full_proj_transform(self):
         return (
@@ -103,14 +108,17 @@ class Camera(nn.Module):
             )
         ).squeeze(0)
 
+    # Camera position in world coordinates.
     @property
     def camera_center(self):
         return self.world_view_transform.inverse()[3, :3]
 
+    # Overwrite the camera's rotation and translation.
     def update_RT(self, R, t):
         self.R = R.to(device=self.device)
         self.T = t.to(device=self.device)
 
+    # Compute an edge-based gradient mask used to weight the tracking/mapping loss.
     def compute_grad_mask(self, config):
         edge_threshold = config["Training"]["edge_threshold"]
 
@@ -142,6 +150,7 @@ class Camera(nn.Module):
                 img_grad_intensity > median_img_grad_intensity * edge_threshold
             )
 
+    # Free image, depth, and gradient tensors to release memory.
     def clean(self):
         self.original_image = None
         self.depth = None

@@ -23,6 +23,7 @@ from utils.slam_utils import get_loss_tracking, get_median_depth
 
 
 class FrontEnd(mp.Process):
+    # Initialize frontend process state: queues, tracking/keyframe bookkeeping, ROS publishers.
     def __init__(self, config, cloud_pub, traj_pub, node):
         super().__init__()
         self.node = node
@@ -53,6 +54,7 @@ class FrontEnd(mp.Process):
         self.device = "cuda:0"
         self.pause = False
 
+    # Load tracking/keyframe/save hyperparameters from config into instance attributes.
     def set_hyperparams(self):
         self.save_dir = self.config["Results"]["save_dir"]
         self.save_results = self.config["Results"]["save_results"]
@@ -64,6 +66,7 @@ class FrontEnd(mp.Process):
         self.window_size = self.config["Training"]["window_size"]
         self.single_thread = self.config["Training"]["single_thread"]
 
+    # Build an initial depth map for a new keyframe (from rendered depth or ground-truth depth).
     def add_new_keyframe(self, cur_frame_idx, depth=None, opacity=None, init=False):
         rgb_boundary_threshold = self.config["Training"]["rgb_boundary_threshold"]
         self.kf_indices.append(cur_frame_idx)
@@ -118,6 +121,8 @@ class FrontEnd(mp.Process):
         return initial_depth[0].numpy()
 
     def initialize(self, cur_frame_idx, viewpoint):
+        """Frontend initialization"""
+
         self.initialized = not self.monocular
         self.kf_indices = []
         self.iteration_count = 0
@@ -135,6 +140,7 @@ class FrontEnd(mp.Process):
         self.request_init(cur_frame_idx, viewpoint, depth_map)
         self.reset = False
 
+    # Every frame: optimize camera pose (and exposure) against the current Gaussian map via render loss.
     def tracking(self, cur_frame_idx, viewpoint):
         prev = self.cameras[cur_frame_idx - self.use_every_n_frames]
         viewpoint.update_RT(prev.R, prev.T)
@@ -170,8 +176,8 @@ class FrontEnd(mp.Process):
         )
 
         pose_optimizer = torch.optim.Adam(opt_params)
+        torch.cuda.empty_cache() # Clear CUDA cache and free memory
         for tracking_itr in range(self.tracking_itr_num):
-            torch.cuda.empty_cache() # Clear CUDA cache and free memory
             render_pkg = render(
                 viewpoint, self.gaussians, self.pipeline_params, self.background
             )
@@ -206,6 +212,7 @@ class FrontEnd(mp.Process):
         self.median_depth = get_median_depth(depth, opacity)
         return render_pkg
 
+    # Decide if current frame should become a keyframe, based on translation and covisibility overlap vs last keyframe.
     def is_keyframe(
         self,
         cur_frame_idx,
@@ -235,6 +242,7 @@ class FrontEnd(mp.Process):
         point_ratio_2 = intersection / union
         return (point_ratio_2 < kf_overlap and dist_check2) or dist_check
 
+    # Insert new keyframe into sliding window, dropping low-overlap or most-distant keyframes to maintain window size.
     def add_to_window(
         self, cur_frame_idx, cur_frame_visibility_filter, occ_aware_visibility, window
     ):
@@ -296,20 +304,25 @@ class FrontEnd(mp.Process):
 
         return window, removed_frame
 
+    # Send a new keyframe (with window and depth map) to the backend for mapping.
     def request_keyframe(self, cur_frame_idx, viewpoint, current_window, depthmap):
         msg = ["keyframe", cur_frame_idx, viewpoint, current_window, depthmap]
         self.backend_queue.put(msg)
         self.requested_keyframe += 1
 
+    # Send a plain (non-keyframe) mapping request for the current frame to the backend.
     def reqeust_mapping(self, cur_frame_idx, viewpoint):
         msg = ["map", cur_frame_idx, viewpoint]
         self.backend_queue.put(msg)
 
     def request_init(self, cur_frame_idx, viewpoint, depth_map):
+        """Request the backend to initialize the scene"""
+
         msg = ["init", cur_frame_idx, viewpoint, depth_map]
         self.backend_queue.put(msg)
         self.requested_init = True
 
+    # Update local gaussians, occlusion-aware visibility, and keyframe poses from backend message.
     def sync_backend(self, data):
         self.gaussians = data[1]
         occ_aware_visibility = data[2]
@@ -319,11 +332,13 @@ class FrontEnd(mp.Process):
         for kf_id, kf_R, kf_T in keyframes:
             self.cameras[kf_id].update_RT(kf_R.clone(), kf_T.clone())
 
+    # Free per-frame camera data and periodically clear CUDA cache for non-keyframe frames.
     def cleanup(self, cur_frame_idx):
         self.cameras[cur_frame_idx].clean()
         if cur_frame_idx % 10 == 0:
             torch.cuda.empty_cache()
 
+    # Publish current point cloud and camera trajectory to ROS topics (called when a keyframe is added).
     def publish_counter(self):
         points, colors = self.gaussians.generate_pcd(self.config["Dataset"]["type"] == "ROS")
         cloud_msg = self.create_pointcloud2_msg(points, colors)
@@ -331,6 +346,7 @@ class FrontEnd(mp.Process):
         traj_msg = self.generate_trajectory_message(self.cameras, self.config["Dataset"]["type"] == "ROS")
         self.traj_pub.publish(traj_msg)
 
+    # Pack XYZ points and RGB colors into a ROS PointCloud2 message.
     def create_pointcloud2_msg(self, points, colors):
         msg = PointCloud2()
 
@@ -366,12 +382,14 @@ class FrontEnd(mp.Process):
             
         return msg
     
+    # Build a 4x4 camera-to-world pose matrix from rotation and translation tensors.
     def gen_pose_matrix(self, R, T):
         pose = np.eye(4)
         pose[0:3, 0:3] = R.cpu().numpy()
         pose[0:3, 3] = T.cpu().numpy()
         return pose
     
+    # Build a ROS Path message from all tracked camera poses, converting rotations to quaternions.
     def generate_trajectory_message(self, cameras, is_ROS = False):
         trajectory_msg = Path()
         trajectory_msg.header.frame_id = 'map'  # Change to your desired frame ID
@@ -425,6 +443,7 @@ class FrontEnd(mp.Process):
 
         return trajectory_msg
 
+    # Main frontend loop: process each dataset frame, track pose, select keyframes, handle backend sync messages.
     def run(self):
         cur_frame_idx = 0
         projection_matrix = getProjectionMatrix2(

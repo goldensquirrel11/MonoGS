@@ -32,6 +32,7 @@ from gaussian_splatting.utils.system_utils import mkdir_p
 
 
 class GaussianModel:
+    # Initializes empty Gaussian parameter tensors and activation functions.
     def __init__(self, sh_degree: int, config=None):
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree
@@ -65,6 +66,7 @@ class GaussianModel:
 
         self.isotropic = False
 
+    # Builds the 3D covariance matrix (flattened symmetric part) from scaling and rotation.
     def build_covariance_from_scaling_rotation(
         self, scaling, scaling_modifier, rotation
     ):
@@ -73,37 +75,45 @@ class GaussianModel:
         symm = strip_symmetric(actual_covariance)
         return symm
 
+    # Returns per-Gaussian scale (exp of raw scaling parameter).
     @property
     def get_scaling(self):
         return self.scaling_activation(self._scaling)
 
+    # Returns per-Gaussian rotation quaternion, normalized.
     @property
     def get_rotation(self):
         return self.rotation_activation(self._rotation)
 
+    # Returns raw Gaussian 3D positions (means).
     @property
     def get_xyz(self):
         return self._xyz
 
+    # Returns concatenated SH color features (DC + higher-order rest terms).
     @property
     def get_features(self):
         features_dc = self._features_dc
         features_rest = self._features_rest
         return torch.cat((features_dc, features_rest), dim=1)
 
+    # Returns per-Gaussian opacity (sigmoid of raw opacity parameter).
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
 
+    # Computes the 3D covariance for each Gaussian given a scale modifier.
     def get_covariance(self, scaling_modifier=1):
         return self.covariance_activation(
             self.get_scaling, scaling_modifier, self._rotation
         )
 
+    # Increments the active SH degree by one, up to the configured max.
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
+    # Builds an RGBD-based point cloud from a camera frame (and optional depth map).
     def create_pcd_from_image(self, cam_info, init=False, scale=2.0, depthmap=None):
         cam = cam_info
         image_ab = (torch.exp(cam.exposure_a)) * cam.original_image + cam.exposure_b
@@ -130,6 +140,7 @@ class GaussianModel:
 
         return self.create_pcd_from_image_and_depth(cam, rgb, depth, init)
 
+    # Converts RGB+depth images into an initial set of Gaussian parameters via a downsampled point cloud.
     def create_pcd_from_image_and_depth(self, cam, rgb, depth, init=False):
         if init:
             downsample_factor = self.config["Dataset"]["pcd_downsample_init"]
@@ -202,9 +213,11 @@ class GaussianModel:
 
         return fused_point_cloud, features, scales, rots, opacities
 
+    # Stores the spatial learning-rate scale factor used for position/scaling lr.
     def init_lr(self, spatial_lr_scale):
         self.spatial_lr_scale = spatial_lr_scale
 
+    # Wraps new point-cloud-derived tensors as optimizable parameters and appends them to the model.
     def extend_from_pcd(
         self, fused_point_cloud, features, scales, rots, opacities, kf_id
     ):
@@ -232,6 +245,7 @@ class GaussianModel:
             new_n_obs=new_n_obs,
         )
 
+    # Creates a point cloud from a camera frame and extends the Gaussian model with it.
     def extend_from_pcd_seq(
         self, cam_info, kf_id=-1, init=False, scale=2.0, depthmap=None
     ):
@@ -242,6 +256,7 @@ class GaussianModel:
             fused_point_cloud, features, scales, rots, opacities, kf_id
         )
 
+    # Sets up the Adam optimizer with per-parameter-group learning rates and the xyz lr scheduler.
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -309,6 +324,7 @@ class GaussianModel:
                 param_group["lr"] = lr
                 return lr
 
+    # Builds the ordered list of PLY vertex attribute names (position, SH coeffs, opacity, scale, rotation).
     def construct_list_of_attributes(self):
         l = ["x", "y", "z", "nx", "ny", "nz"]
         # All channels except the 3 DC
@@ -323,6 +339,7 @@ class GaussianModel:
             l.append("rot_{}".format(i))
         return l
 
+    # Serializes all Gaussian parameters to a PLY file on disk.
     def save_ply(self, path):
         mkdir_p(os.path.dirname(path))
 
@@ -359,6 +376,7 @@ class GaussianModel:
         el = PlyElement.describe(elements, "vertex")
         PlyData([el]).write(path)
 
+    # Builds a point cloud (points, colors) from Gaussian parameters, optionally remapped to ROS coordinate frame.
     def generate_pcd(self, is_ROS = False):
         xyz = self._xyz.detach().cpu().numpy()
         if is_ROS:
@@ -414,6 +432,7 @@ class GaussianModel:
         return points, colors
 
 
+    # Converts in-memory PLY vertex data to an Open3D point cloud, ordering points by scale/opacity.
     def process_ply_to_pcd(self, plydata):
         vert = plydata["vertex"]
         sorted_indices = np.argsort(
@@ -441,11 +460,13 @@ class GaussianModel:
         return pcd
     
 
+    # Resets all Gaussian opacities to a low fixed value (0.01) to counter floaters.
     def reset_opacity(self):
         opacities_new = inverse_sigmoid(torch.ones_like(self.get_opacity) * 0.01)
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
 
+    # Lowers opacity of non-visible Gaussians while keeping visible ones' opacity unchanged.
     def reset_opacity_nonvisible(
         self, visibility_filters
     ):  ##Reset opacity for only non-visible gaussians
@@ -456,9 +477,11 @@ class GaussianModel:
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
 
+    # Loads Gaussian parameters (positions, SH coeffs, opacity, scale, rotation) from a PLY file.
     def load_ply(self, path):
         plydata = PlyData.read(path)
 
+        # Reads vertex positions/normals from a PLY file, ignoring color, as a BasicPointCloud.
         def fetchPly_nocolor(path):
             plydata = PlyData.read(path)
             vertices = plydata["vertex"]
@@ -547,6 +570,7 @@ class GaussianModel:
         self.unique_kfIDs = torch.zeros((self._xyz.shape[0]))
         self.n_obs = torch.zeros((self._xyz.shape[0]), device="cpu").int()
 
+    # Replaces the optimizer's tensor for a named parameter group with a new tensor, resetting its Adam state.
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -562,6 +586,7 @@ class GaussianModel:
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
+    # Filters all optimizer parameter tensors and their Adam state by a boolean keep-mask.
     def _prune_optimizer(self, mask):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -584,6 +609,7 @@ class GaussianModel:
                 optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
+    # Removes Gaussians selected by mask from all parameters, optimizer state, and bookkeeping tensors.
     def prune_points(self, mask):
         valid_points_mask = ~mask
         optimizable_tensors = self._prune_optimizer(valid_points_mask)
@@ -602,6 +628,7 @@ class GaussianModel:
         self.unique_kfIDs = self.unique_kfIDs[valid_points_mask.cpu()]
         self.n_obs = self.n_obs[valid_points_mask.cpu()]
 
+    # Concatenates new per-parameter tensors onto existing optimizer parameters, extending Adam state.
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -636,6 +663,7 @@ class GaussianModel:
 
         return optimizable_tensors
 
+    # Appends newly created Gaussians to the model and resets densification bookkeeping tensors.
     def densification_postfix(
         self,
         new_xyz,
@@ -672,6 +700,7 @@ class GaussianModel:
         if new_n_obs is not None:
             self.n_obs = torch.cat((self.n_obs, new_n_obs)).int()
 
+    # Splits large Gaussians with high view-space gradient into N smaller, jittered Gaussians, then prunes the originals.
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
         # Extract points that satisfy the gradient condition
@@ -722,6 +751,7 @@ class GaussianModel:
 
         self.prune_points(prune_filter)
 
+    # Clones small Gaussians with high view-space gradient to densify under-reconstructed regions.
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(
@@ -754,6 +784,7 @@ class GaussianModel:
         )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
+        """Densification and pruning to capture finer geometric details"""
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
@@ -770,6 +801,7 @@ class GaussianModel:
             )
         self.prune_points(prune_mask)
 
+    # Accumulates view-space position gradient norms and counts per Gaussian for densification decisions.
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
         self.xyz_gradient_accum[update_filter] += torch.norm(
             viewspace_point_tensor.grad[update_filter, :2], dim=-1, keepdim=True

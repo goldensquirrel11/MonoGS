@@ -1,6 +1,7 @@
 import torch
 
 
+# Compute vertical/horizontal image gradients per channel via Scharr filter.
 def image_gradient(image):
     # Compute image gradient using Scharr Filter
     c = image.shape[0]
@@ -21,6 +22,7 @@ def image_gradient(image):
     return img_grad_v[0], img_grad_h[0]
 
 
+# Mask marking pixels whose full 3x3 neighborhood exceeds eps (valid gradient region).
 def image_gradient_mask(image, eps=0.01):
     # Compute image gradient mask
     c = image.shape[0]
@@ -38,6 +40,7 @@ def image_gradient_mask(image, eps=0.01):
     return img_grad_v[0] == torch.sum(conv_x), img_grad_h[0] == torch.sum(conv_y)
 
 
+# Edge-aware depth smoothness regularizer weighted by inverse image gradient.
 def depth_reg(depth, gt_image, huber_eps=0.1, mask=None):
     mask_v, mask_h = image_gradient_mask(depth)
     gray_grad_v, gray_grad_h = image_gradient(gt_image.mean(dim=0, keepdim=True))
@@ -53,6 +56,7 @@ def depth_reg(depth, gt_image, huber_eps=0.1, mask=None):
     return err
 
 
+# Dispatch tracking loss to RGB-only or RGB-D variant after exposure correction.
 def get_loss_tracking(config, image, depth, opacity, viewpoint, initialization=False):
     image_ab = (torch.exp(viewpoint.exposure_a)) * image + viewpoint.exposure_b
     if config["Training"]["monocular"]:
@@ -60,6 +64,7 @@ def get_loss_tracking(config, image, depth, opacity, viewpoint, initialization=F
     return get_loss_tracking_rgbd(config, image_ab, depth, opacity, viewpoint)
 
 
+# Opacity-weighted masked L1 photometric tracking loss against ground-truth image.
 def get_loss_tracking_rgb(config, image, depth, opacity, viewpoint):
     gt_image = viewpoint.original_image.cuda()
     _, h, w = gt_image.shape
@@ -71,6 +76,7 @@ def get_loss_tracking_rgb(config, image, depth, opacity, viewpoint):
     return l1.mean()
 
 
+# Weighted combination of RGB photometric loss and masked depth L1 loss for tracking.
 def get_loss_tracking_rgbd(
     config, image, depth, opacity, viewpoint, initialization=False
 ):
@@ -88,6 +94,7 @@ def get_loss_tracking_rgbd(
     return alpha * l1_rgb + (1 - alpha) * l1_depth.mean()
 
 
+# Dispatch mapping loss to RGB-only or RGB-D variant, skipping exposure correction on init.
 def get_loss_mapping(config, image, depth, viewpoint, opacity, initialization=False):
     if initialization:
         image_ab = image
@@ -98,6 +105,7 @@ def get_loss_mapping(config, image, depth, viewpoint, opacity, initialization=Fa
     return get_loss_mapping_rgbd(config, image_ab, depth, viewpoint)
 
 
+# Masked L1 photometric mapping loss against ground-truth image.
 def get_loss_mapping_rgb(config, image, depth, viewpoint):
     gt_image = viewpoint.original_image.cuda()
     _, h, w = gt_image.shape
@@ -110,6 +118,7 @@ def get_loss_mapping_rgb(config, image, depth, viewpoint):
     return l1_rgb.mean()
 
 
+# Weighted combination of RGB and depth L1 losses for mapping.
 def get_loss_mapping_rgbd(config, image, depth, viewpoint, initialization=False):
     alpha = config["Training"]["alpha"] if "alpha" in config["Training"] else 0.95
     rgb_boundary_threshold = config["Training"]["rgb_boundary_threshold"]
@@ -128,6 +137,7 @@ def get_loss_mapping_rgbd(config, image, depth, viewpoint, initialization=False)
     return alpha * l1_rgb.mean() + (1 - alpha) * l1_depth.mean()
 
 
+# Compute median (and optionally std) of valid rendered depth values under opacity/mask filters.
 def get_median_depth(depth, opacity=None, mask=None, return_std=False):
     depth = depth.detach().clone()
     opacity = opacity.detach()

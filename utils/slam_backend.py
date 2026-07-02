@@ -14,6 +14,7 @@ from utils.slam_utils import get_loss_mapping
 
 
 class BackEnd(mp.Process):
+    # Initialize backend process state: gaussians, optimization params, queues, window/keyframe bookkeeping.
     def __init__(self, config):
         super().__init__()
         self.config = config
@@ -38,6 +39,7 @@ class BackEnd(mp.Process):
         self.initialized = not self.monocular
         self.keyframe_optimizers = None
 
+    # Load mapping/densification/pruning hyperparameters from config into instance attributes.
     def set_hyperparams(self):
         self.save_results = self.config["Results"]["save_results"]
 
@@ -64,11 +66,13 @@ class BackEnd(mp.Process):
             else False
         )
 
+    # Add new Gaussians for a keyframe by extending the point cloud from its depth map.
     def add_next_kf(self, frame_idx, viewpoint, init=False, scale=2.0, depth_map=None):
         self.gaussians.extend_from_pcd_seq(
             viewpoint, kf_id=frame_idx, init=init, scale=scale, depthmap=depth_map
         )
 
+    # Clear all backend state and gaussians, and flush the backend queue, for scene re-initialization.
     def reset(self):
         self.iteration_count = 0
         self.occ_aware_visibility = {}
@@ -83,6 +87,7 @@ class BackEnd(mp.Process):
         while not self.backend_queue.empty():
             self.backend_queue.get()
 
+    # Run initial bundle-adjustment iterations on the first frame to bootstrap the Gaussian map.
     def initialize_map(self, cur_frame_idx, viewpoint):
         for mapping_iteration in range(self.init_itr_num):
             self.iteration_count += 1
@@ -139,6 +144,7 @@ class BackEnd(mp.Process):
         Log("Initialized map")
         return render_pkg
 
+    # Joint bundle adjustment: optimize gaussians and keyframe poses over the current window, with optional pruning/densification.
     def map(self, current_window, prune=False, iters=1):
         if len(current_window) == 0:
             return
@@ -317,6 +323,7 @@ class BackEnd(mp.Process):
                     update_pose(viewpoint)
         return gaussian_split
 
+    # Post-process refinement pass: optimize gaussian colors/opacity over many iterations across all keyframes.
     def color_refinement(self):
         Log("Starting color refinement")
 
@@ -352,6 +359,7 @@ class BackEnd(mp.Process):
                 self.gaussians.update_learning_rate(iteration)
         Log("Map refinement done")
 
+    # Send updated gaussians, visibility, and keyframe poses back to the frontend.
     def push_to_frontend(self, tag=None):
         self.last_sent = 0
         keyframes = []
@@ -364,6 +372,7 @@ class BackEnd(mp.Process):
         msg = [tag, clone_obj(self.gaussians), self.occ_aware_visibility, keyframes]
         self.frontend_queue.put(msg)
 
+    # Main backend loop: continuously map current window or handle init/keyframe/pause/stop messages from frontend.
     def run(self):
         while True:
             if self.backend_queue.empty():
