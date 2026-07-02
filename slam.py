@@ -29,7 +29,7 @@ from utils.slam_frontend import FrontEnd
 
 class SLAM:
     # Set up ROS node, dataset, gaussian model, frontend/backend processes, run SLAM, and evaluate results.
-    def __init__(self, config, save_dir=None):
+    def __init__(self, config, save_dir=None, headless=False):
         self.node = rclpy.create_node("monoGS")
         self.cloud_publisher = self.node.create_publisher(PointCloud2, '/monoGS/cloud', 10)
         self.trajectory_publisher = self.node.create_publisher(Path, '/monoGS/trajectory', 10)
@@ -55,6 +55,8 @@ class SLAM:
         self.use_gui = self.config["Results"]["use_gui"]
         if self.live_mode:
             self.use_gui = True
+        if headless:
+            self.use_gui = False
         self.eval_rendering = self.config["Results"]["eval_rendering"]
 
         model_params.sh_degree = 3 if self.use_spherical_harmonics else 0
@@ -212,6 +214,11 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
     parser.add_argument("--config", type=str)
     parser.add_argument("--eval", action="store_true")
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Disable the GUI even in live mode (realsense/ROS), where it is normally forced on.",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -258,7 +265,7 @@ if __name__ == "__main__":
         wandb.define_metric("frame_idx")
         wandb.define_metric("ate*", step_metric="frame_idx")
     rclpy.init()
-    slam = SLAM(config, save_dir=save_dir)
+    slam = SLAM(config, save_dir=save_dir, headless=args.headless)
 
     slam.run()
     wandb.finish()
