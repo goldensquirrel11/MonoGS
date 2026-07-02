@@ -1,0 +1,54 @@
+name: MonoGS tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cpu-tests:
+    # Stages 1-2 (data ingestion wiring, transformation): no GPU needed,
+    # runs on every push/PR.
+    runs-on: ubuntu-22.04
+    container:
+      image: ros:humble
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python test deps
+        run: |
+          apt-get update
+          apt-get install -y python3-pip
+          pip install --upgrade pytest torch --index-url https://download.pytorch.org/whl/cpu
+          pip install opencv-python-headless numpy pyyaml munch
+          rosdep update || true
+          apt-get install -y ros-humble-cv-bridge ros-humble-message-filters ros-humble-sensor-msgs ros-humble-nav-msgs
+
+      - name: Run stage 1-2 tests
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          # ROS humble's launch_testing pytest plugin conflicts with recent
+          # pytest releases when autoloaded; these tests don't use
+          # launch_testing so disabling autoload keeps collection clean.
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/ --ignore=tests/system -v
+
+  gpu-system-tests:
+    # Stage 3-4 end-to-end (tracking/mapping + ROS output): needs CUDA, the
+    # built diff-gaussian-rasterization submodule, and a display (live mode
+    # always spawns the GUI process -- see tests/system/test_live_pipeline.py
+    # docstring). GitHub-hosted runners have neither; this requires a
+    # self-hosted GPU runner and is not run automatically on every push.
+    if: false  # flip to true once a self-hosted GPU/xvfb runner is registered
+    runs-on: [self-hosted, gpu]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Run stage 3-4 system test
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          conda activate mono_gs_ros
+          xvfb-run -a pytest tests/system/test_live_pipeline.py -v
