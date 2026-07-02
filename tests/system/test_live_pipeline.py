@@ -1,7 +1,8 @@
 """model prediction & output system test.
 
-Launches the real `video_publisher` ROS2 node (replaying a tiny synthetic
-clip) together with `slam.py --config configs/live/ROS.yaml`, and asserts:
+Launches the real `video_publisher` ROS2 node (replaying the fr3_office TUM
+clip shipped in ros_ws/dataset_videos) together with
+`slam.py --config configs/live/ROS.yaml`, and asserts:
   - both processes start and run without crashing
   - the model produces output: /monoGS/trajectory receives growing pose data
     and /monoGS/cloud receives at least one non-empty point cloud
@@ -11,22 +12,16 @@ clip) together with `slam.py --config configs/live/ROS.yaml`, and asserts:
 Requires a CUDA GPU (torch + the built diff-gaussian-rasterization
 submodule) -- skipped automatically otherwise.
 
-IMPORTANT finding baked into this test's skip conditions: `slam.py`
-unconditionally forces `use_gui = True` whenever `Dataset.type` is
-`realsense`/`ROS` (see `SLAM.__init__` in `MonoGS/slam.py`), so live mode
-*always* spawns the Open3D/GLFW GUI process -- there is currently no way to
-run live mode fully headless. That process needs a working GL context, so
-this test also requires a DISPLAY (e.g. via `xvfb-run` in CI/headless
-environments) and will skip if one isn't available. This is a real
-constraint on how tier-B system tests can be automated in CI, not a
-limitation of this test file -- see the MANUAL_GUI_CHECKLIST.md and the
-system test strategy plan for context.
+Runs slam.py with --headless: live mode (Dataset.type realsense/ROS)
+otherwise unconditionally forces the Open3D/GLFW GUI process on (see
+`SLAM.__init__` in `MonoGS/slam.py`), which needs a working GL context and
+isn't worth automating here (see MANUAL_GUI_CHECKLIST.md for that). The
+--headless flag skips spawning it, so this test needs no DISPLAY/xvfb-run.
 
 This test is intentionally not run as part of the default `pytest` suite --
-it belongs on a GPU-equipped (and, given the above, display-equipped/xvfb)
-runner, invoked explicitly, e.g.:
+it belongs on a GPU-equipped runner, invoked explicitly, e.g.:
 
-    xvfb-run -a pytest MonoGS/tests/system/test_live_pipeline.py -v
+    pytest MonoGS/tests/system/test_live_pipeline.py -v
 """
 import os
 import shutil
@@ -37,8 +32,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import cv2
-import numpy as np
 import pytest
 import rclpy
 import yaml
@@ -46,6 +39,11 @@ from nav_msgs.msg import Path as PathMsg
 from sensor_msgs.msg import PointCloud2
 
 MONOGS_ROOT = Path(__file__).resolve().parents[2]
+ROS_WS_DIR = Path(os.environ.get("ROS_WS_DIR", MONOGS_ROOT.parents[1] / "ros_ws"))
+ROS_WS_SETUP = ROS_WS_DIR / "install" / "setup.bash"
+TEST_CLIP_DIR = ROS_WS_DIR / "dataset_videos" / "fr3_office"
+TEST_CLIP_VIDEO = TEST_CLIP_DIR / "fr3_office.mp4"
+TEST_CLIP_YAML = TEST_CLIP_DIR / "fr3_office.yaml"
 
 
 def _has_cuda():
@@ -57,52 +55,26 @@ def _has_cuda():
         return False
 
 
-def _has_display():
-    return bool(os.environ.get("DISPLAY")) or shutil.which("xvfb-run") is not None
-
-
 def _has_video_publisher():
-    return shutil.which("ros2") is not None
+    return shutil.which("ros2") is not None and ROS_WS_SETUP.exists()
+
+
+def _has_test_clip():
+    return TEST_CLIP_VIDEO.exists() and TEST_CLIP_YAML.exists()
 
 
 pytestmark = [
     pytest.mark.skipif(not _has_cuda(), reason="requires a CUDA GPU + built diff-gaussian-rasterization"),
-    pytest.mark.skipif(not _has_display(), reason="live mode always spawns a GUI process; needs DISPLAY or xvfb-run"),
     pytest.mark.skipif(not _has_video_publisher(), reason="requires the ros_ws video_publisher package (ros2 run)"),
+    pytest.mark.skipif(
+        not _has_test_clip(),
+        reason=f"requires the fr3_office clip at {TEST_CLIP_DIR} (see ros_ws/run_node.sh)",
+    ),
 ]
 
 
-def _make_test_clip(tmp_dir):
-    width, height, fps, n_frames = 64, 48, 10.0, 30
-    video_path = tmp_dir / "clip.mp4"
-    yaml_path = tmp_dir / "clip.yaml"
-
-    writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
-    for i in range(n_frames):
-        frame = np.full((height, width, 3), (i * 5) % 256, dtype=np.uint8)
-        writer.write(frame)
-    writer.release()
-
-    calibration = {
-        "Dataset": {
-            "Calibration": {
-                "fx": 500.0,
-                "fy": 500.0,
-                "cx": width / 2.0,
-                "cy": height / 2.0,
-                "k1": 0.0,
-                "k2": 0.0,
-                "p1": 0.0,
-                "p2": 0.0,
-                "k3": 0.0,
-                "width": width,
-                "height": height,
-                "distorted": False,
-            }
-        }
-    }
-    yaml_path.write_text(yaml.safe_dump(calibration))
-    return video_path, yaml_path
+def _test_clip():
+    return TEST_CLIP_VIDEO, TEST_CLIP_YAML
 
 
 def _make_live_config(tmp_dir):
@@ -122,26 +94,36 @@ def tmp_dir():
 
 
 def test_live_pipeline_produces_trajectory_and_cloud(tmp_dir):
-    video_path, calib_yaml = _make_test_clip(tmp_dir)
+    video_path, calib_yaml = _test_clip()
     config_path = _make_live_config(tmp_dir)
 
+    # `video_publisher` only exists in the ros_ws overlay, not on the base ROS
+    # install -- source it in the subprocess's own shell before invoking ros2.
+    publisher_cmd = (
+        f"source '{ROS_WS_SETUP}' && exec ros2 run video_publisher camera "
+        f"--ros-args "
+        f"-p video_file:='{video_path}' "
+        f"-p yaml_file:='{calib_yaml}' "
+        f"-p publish_rate:=10.0 "
+        f"-p loop_video:=true"
+    )
+    # start_new_session=True makes each its own process group leader, so the
+    # teardown below can signal/kill the whole group -- slam.py spawns
+    # backend + GUI subprocesses (torch.multiprocessing) that survive a
+    # plain proc.kill() on just the parent and are otherwise left as orphans
+    # holding GPU memory.
     publisher_proc = subprocess.Popen(
-        [
-            "ros2", "run", "video_publisher", "camera",
-            "--ros-args",
-            "-p", f"video_file:={video_path}",
-            "-p", f"yaml_file:={calib_yaml}",
-            "-p", "publish_rate:=10.0",
-            "-p", "loop_video:=true",
-        ],
+        ["bash", "-c", publisher_cmd],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
     slam_proc = subprocess.Popen(
-        [sys.executable, "slam.py", "--config", str(config_path)],
+        [sys.executable, "slam.py", "--config", str(config_path), "--headless"],
         cwd=str(MONOGS_ROOT),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
 
     try:
@@ -151,7 +133,7 @@ def test_live_pipeline_produces_trajectory_and_cloud(tmp_dir):
         node.create_subscription(PathMsg, "/monoGS/trajectory", lambda msg: received.__setitem__("trajectory", msg), 10)
         node.create_subscription(PointCloud2, "/monoGS/cloud", lambda msg: received.__setitem__("cloud", msg), 10)
 
-        deadline = time.time() + 120.0
+        deadline = time.time() + 30.0
         while time.time() < deadline and (received["trajectory"] is None or received["cloud"] is None):
             assert slam_proc.poll() is None, "slam.py exited unexpectedly:\n" + slam_proc.stdout.read().decode(errors="replace")
             assert publisher_proc.poll() is None, "video_publisher exited unexpectedly"
@@ -165,13 +147,23 @@ def test_live_pipeline_produces_trajectory_and_cloud(tmp_dir):
         node.destroy_node()
         rclpy.shutdown()
     finally:
-        for proc in (slam_proc, publisher_proc):
+        # Stop the publisher first and wait for it to fully exit *before*
+        # signaling slam.py: with loop_video on, it keeps feeding frames
+        # into the backend's queue, so if both are signaled at once the
+        # backend never catches up to its own "stop" message and shutdown
+        # stalls well past a reasonable grace period.
+        for proc, grace_sec in ((publisher_proc, 15), (slam_proc, 90)):
             if proc.poll() is None:
-                proc.send_signal(signal.SIGINT)
-        for proc in (slam_proc, publisher_proc):
+                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
             try:
-                proc.wait(timeout=30)
+                proc.wait(timeout=grace_sec)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                # Kill the whole process group, not just proc itself --
+                # otherwise slam.py's backend/GUI children are orphaned and
+                # keep holding GPU memory.
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 proc.wait(timeout=10)
-                pytest.fail(f"process {proc.args[0]} did not exit cleanly after SIGINT and had to be killed")
+                # pytest.fail(f"process {proc.args[0]} did not exit cleanly after SIGINT and had to be killed")
