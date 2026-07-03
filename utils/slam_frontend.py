@@ -405,20 +405,18 @@ class FrontEnd(mp.Process):
             translation = transform[:3, 3]
             rotation = transform[:3, :3]
 
-            # TODO: Need to validate if the frames are correct, seems slightly off
             if is_ROS:
-                # Transformation matrix from left-handed (x-left, z-forward) to right-handed (z-up, x-forward)
-                T_lh_to_rh = np.array([
-                [1, 0, 0, 0],
+                # Remap camera axes to ROS-friendly axes (x-forward, y-down,
+                # z-right), keeping the frame right-handed.
+                T_cam_to_ros = np.array([
                 [0, 0, 1, 0],
-                [0, -1, 0, 0],
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
                 [0, 0, 0, 1]
                 ])
-                transform_rh = T_lh_to_rh @ transform 
-                # Convert from left-handed to right-handed coordinate system
-                translation_transformed = transform[:3, 3]
-
-                rotation_transformed = transform[:3, :3]
+                transform_rh = T_cam_to_ros @ transform
+                translation_transformed = transform_rh[:3, 3]
+                rotation_transformed = transform_rh[:3, :3]
             else:
                 translation_transformed = translation
                 rotation_transformed = rotation
